@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import aruba_tools  # noqa: E402
 
 _SECRET = os.environ.get("SECRET_KEY", "")
-if len(_SECRET) < 32:
-    raise RuntimeError("SECRET_KEY mancante o troppo corta (servono almeno 32 caratteri casuali)")
+if not _SECRET:
+    raise RuntimeError("SECRET_KEY mancante: impostala su Vercel (almeno 32 caratteri casuali)")
 KEY = hashlib.sha256(_SECRET.encode()).digest()
 CODE_TTL = 600
 ACCESS_TTL = 3600
