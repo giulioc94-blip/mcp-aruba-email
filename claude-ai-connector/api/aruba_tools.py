@@ -605,7 +605,7 @@ def rpc(req):
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL),
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "aruba-studio", "version": "3.3.0"},
+            "serverInfo": {"name": "aruba-studio", "version": "3.3.1"},
             "instructions": "Caselle email Aruba collegate: " + ", ".join(CURRENT.get()) + ". Prima di inviare, rispondere o eliminare chiedi conferma all'utente.",
         }}
     if method == "ping":
