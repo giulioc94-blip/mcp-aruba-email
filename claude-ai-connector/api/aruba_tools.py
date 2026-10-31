@@ -216,8 +216,16 @@ class Box:
             pass
 
 
+def _q(folder):
+    """Nome di cartella IMAP quotato; rifiuta caratteri che chiuderebbero il comando."""
+    f = folder or "INBOX"
+    if any(ch in f for ch in '"\\\r\n\0'):
+        raise RuntimeError(f"Nome di cartella non valido: {folder!r}")
+    return '"%s"' % f
+
+
 def _select(c, folder):
-    typ, _ = c.select('"%s"' % (folder or "INBOX").replace('"', ""), readonly=True)
+    typ, _ = c.select(_q(folder), readonly=True)
     if typ != "OK":
         raise RuntimeError(f"Cartella non trovata: {folder}")
 
@@ -301,13 +309,13 @@ def search_emails(a):
         _select(c, a.get("folder"))
         crit = ["SINCE", _since(a.get("days", 30))]
         if a.get("sender"):
-            crit += ["FROM", '"%s"' % a["sender"].replace('"', "")]
+            crit += ["FROM", '"%s"' % re.sub(r'["\\\r\n\0]', "", a["sender"])]
         text = a.get("text") or ""
         if text and not text.isascii():
             c.literal = text.encode("utf-8")
             typ, data = c.uid("search", "CHARSET", "UTF-8", *crit, "TEXT")
         else:
-            phrase = '"%s"' % text.replace('"', "").replace("\\", "") if text else None
+            phrase = '"%s"' % re.sub(r'["\\\r\n\0]', "", text) if text else None
             typ, data = c.uid("search", None, *(crit + (["TEXT", phrase] if text else [])))
         return _summaries(c, data[0].split() if data and data[0] else [], _clamp(a.get("limit"), 20), acc)
     return _each(a, run)
@@ -317,7 +325,7 @@ def read_email(a):
     acc = _accounts(a.get("account"))[0]
     with Box(acc) as c:
         _select(c, a.get("folder"))
-        typ, data = c.uid("fetch", str(a["id"]), "(BODY.PEEK[])")
+        typ, data = c.uid("fetch", _ids({"ids": [a["id"]]}), "(BODY.PEEK[])")
         if typ != "OK" or not data or not isinstance(data[0], tuple):
             raise RuntimeError("Email non trovata")
         msg = email.message_from_bytes(data[0][1])
@@ -366,11 +374,14 @@ def _ids(a):
     ids = a.get("ids") or ([a["id"]] if a.get("id") else [])
     if not ids:
         raise RuntimeError("Nessun id indicato")
-    return ",".join(str(x) for x in ids)
+    out = ",".join(str(x).strip() for x in ids)
+    if not re.fullmatch(r"\d+(,\d+)*", out):
+        raise RuntimeError("Id non validi: servono numeri (gli id restituiti da list_emails)")
+    return out
 
 
 def _rw(c, folder):
-    typ, _ = c.select('"%s"' % (folder or "INBOX").replace('"', ""))
+    typ, _ = c.select(_q(folder))
     if typ != "OK":
         raise RuntimeError(f"Cartella non trovata: {folder}")
 
@@ -386,10 +397,10 @@ def _expunge(c, uids):
 def _move(c, uids, dest):
     caps = c.capabilities if hasattr(c, "capabilities") else ()
     if "MOVE" in caps:
-        typ, data = c.uid("MOVE", uids, '"%s"' % dest)
+        typ, data = c.uid("MOVE", uids, _q(dest))
         if typ == "OK":
             return
-    typ, data = c.uid("COPY", uids, '"%s"' % dest)
+    typ, data = c.uid("COPY", uids, _q(dest))
     if typ != "OK":
         raise RuntimeError(f"Spostamento non riuscito verso {dest}: {data}")
     c.uid("STORE", uids, "+FLAGS.SILENT", "(\\Deleted)")
@@ -450,7 +461,7 @@ def list_labels(a):
     for acc in _accounts(a.get("account")):
         try:
             with Box(acc) as c:
-                typ, _ = c.select('"%s"' % (a.get("folder") or "INBOX").replace('"', ""), readonly=True)
+                typ, _ = c.select(_q(a.get("folder")), readonly=True)
                 perm = []
                 for line in (c.untagged_responses.get("OK") or []) + (c.untagged_responses.get("FLAGS") or []):
                     txt = line.decode(errors="replace") if isinstance(line, bytes) else str(line)
@@ -499,10 +510,10 @@ def _save_sent(acc, msg, answered=None):
         with Box(acc) as c:
             sent = _special(c, "\\Sent", ["Sent", "Inviati", "Posta inviata", "Sent Items", "Sent Messages"])
             if sent:
-                c.append('"%s"' % sent, "(\\Seen)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+                c.append(_q(sent), "(\\Seen)", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
             if answered:
-                c.select('"%s"' % (answered[0] or "INBOX"))
-                c.uid("STORE", str(answered[1]), "+FLAGS.SILENT", "(\\Answered)")
+                c.select(_q(answered[0]))
+                c.uid("STORE", _ids({"ids": [answered[1]]}), "+FLAGS.SILENT", "(\\Answered)")
             return sent
     except Exception:
         return None
@@ -548,7 +559,7 @@ def reply_email(a):
     acc = _accounts(a.get("account"))[0]
     with Box(acc) as c:
         _select(c, a.get("folder"))
-        typ, data = c.uid("fetch", str(a["id"]), "(BODY.PEEK[])")
+        typ, data = c.uid("fetch", _ids({"ids": [a["id"]]}), "(BODY.PEEK[])")
         if typ != "OK" or not data or not isinstance(data[0], tuple):
             raise RuntimeError("Email originale non trovata")
         orig = email.message_from_bytes(data[0][1])

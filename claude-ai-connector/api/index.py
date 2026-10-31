@@ -20,7 +20,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 sys.path.insert(0, os.path.dirname(__file__))
 import aruba_tools  # noqa: E402
 
-KEY = hashlib.sha256(os.environ.get("SECRET_KEY", "").encode()).digest()
+_SECRET = os.environ.get("SECRET_KEY", "")
+if len(_SECRET) < 32:
+    raise RuntimeError("SECRET_KEY mancante o troppo corta (servono almeno 32 caratteri casuali)")
+KEY = hashlib.sha256(_SECRET.encode()).digest()
 CODE_TTL = 600
 ACCESS_TTL = 3600
 REFRESH_TTL = 365 * 24 * 3600
