@@ -48,7 +48,8 @@ TOOLS = [
         "description": "Cerca email nelle caselle Aruba per testo (oggetto o corpo) e/o mittente, negli ultimi N giorni.",
         "inputSchema": {"type": "object", "properties": {
             "account": ACCOUNT_PARAM,
-            "text": {"type": "string", "description": "Parola o frase da cercare in oggetto e corpo"},
+            "text": {"type": "string", "description": "Parola o frase: si cerca prima nell'oggetto, poi nel testo se nell'oggetto non c'è"},
+            "where": {"type": "string", "enum": ["auto", "subject"], "description": "subject = solo nell'oggetto (più veloce sulle caselle grandi)"},
             "sender": {"type": "string", "description": "Indirizzo o nome del mittente"},
             "folder": {"type": "string"},
             "days": {"type": "integer", "description": "Predefinito 30"},
@@ -314,9 +315,14 @@ def search_emails(a):
         if text and not text.isascii():
             c.literal = text.encode("utf-8")
             typ, data = c.uid("search", "CHARSET", "UTF-8", *crit, "TEXT")
+        elif text:
+            # Prima l'oggetto, che il server cerca subito; il testo completo solo se l'oggetto non basta
+            phrase = '"%s"' % re.sub(r'["\\\r\n\0]', "", text)
+            typ, data = c.uid("search", None, *crit, "SUBJECT", phrase)
+            if not (data and data[0]) and a.get("where") != "subject":
+                typ, data = c.uid("search", None, *crit, "TEXT", phrase)
         else:
-            phrase = '"%s"' % re.sub(r'["\\\r\n\0]', "", text) if text else None
-            typ, data = c.uid("search", None, *(crit + (["TEXT", phrase] if text else [])))
+            typ, data = c.uid("search", None, *crit)
         return _summaries(c, data[0].split() if data and data[0] else [], _clamp(a.get("limit"), 20), acc)
     return _each(a, run)
 
@@ -605,7 +611,7 @@ def rpc(req):
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL),
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "aruba-studio", "version": "3.3.1"},
+            "serverInfo": {"name": "aruba-studio", "version": "3.4.0"},
             "instructions": "Caselle email Aruba collegate: " + ", ".join(CURRENT.get()) + ". Prima di inviare, rispondere o eliminare chiedi conferma all'utente.",
         }}
     if method == "ping":
