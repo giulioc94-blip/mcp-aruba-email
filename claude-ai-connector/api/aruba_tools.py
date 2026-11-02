@@ -6,8 +6,13 @@ import imaplib
 import json
 import os
 import re
+import ipaddress
+import mimetypes
 import smtplib
+import socket
 import time
+import urllib.parse
+import urllib.request
 from email.message import EmailMessage
 from datetime import datetime, timedelta
 from email.header import decode_header
@@ -26,6 +31,9 @@ except Exception:
     SIGNATURES = {}
 
 ACCOUNT_PARAM = {"type": "string", "description": "Indirizzo della casella (es. info@... o giulio@...). Se omesso: tutte le caselle collegate."}
+
+ATTACH_PARAM = {"type": "array", "items": {"type": "string"},
+                "description": "Allegati: link https pubblici a file (es. il PDF di un modulo su un sito istituzionale), massimo 5 file e 10 MB in tutto"}
 
 TOOLS = [
     {
@@ -84,6 +92,7 @@ TOOLS = [
             "subject": {"type": "string"},
             "body": {"type": "string", "description": "Testo semplice, senza firma: la firma della casella viene aggiunta in automatico"},
             "signature": {"type": "boolean", "description": "Aggiungi la firma della casella (predefinito sì)"},
+            "attachment_urls": ATTACH_PARAM,
         }},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
     },
@@ -96,6 +105,7 @@ TOOLS = [
             "body": {"type": "string", "description": "Testo della risposta, senza firma: viene aggiunta in automatico"},
             "reply_all": {"type": "boolean", "description": "Rispondi a tutti (predefinito no)"},
             "signature": {"type": "boolean", "description": "Aggiungi la firma della casella (predefinito sì)"},
+            "attachment_urls": ATTACH_PARAM,
         }},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
     },
@@ -544,6 +554,55 @@ def _smtp(acc, msg, rcpt):
         s.send_message(msg, from_addr=acc, to_addrs=rcpt)
 
 
+MAX_ATTACH = 10 * 1024 * 1024
+
+
+def _public_https(url):
+    u = urllib.parse.urlparse(url)
+    if u.scheme != "https" or not u.hostname:
+        raise RuntimeError(f"Allegato non valido (serve un link https): {url}")
+    for info in socket.getaddrinfo(u.hostname, u.port or 443):
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise RuntimeError(f"Allegato non consentito (indirizzo non pubblico): {url}")
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _public_https(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _attach(msg, urls):
+    urls = [u for u in (urls or []) if isinstance(u, str) and u.strip()]
+    if len(urls) > 5:
+        raise RuntimeError("Massimo 5 allegati")
+    total, names = 0, []
+    opener = urllib.request.build_opener(_SafeRedirect)
+    for url in urls:
+        url = url.strip()
+        _public_https(url)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (StudioCurcioTerremoto)"})
+        with opener.open(req, timeout=20) as r:
+            data = r.read(MAX_ATTACH + 1 - total)
+            ctype = (r.headers.get_content_type() or "").lower()
+            fname = r.headers.get_filename()
+        total += len(data)
+        if total > MAX_ATTACH:
+            raise RuntimeError("Allegati oltre 10 MB")
+        if not data:
+            raise RuntimeError(f"Allegato vuoto: {url}")
+        fname = re.sub(r"[\r\n\"/\\]", "_", fname or urllib.parse.unquote(urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]) or "allegato")
+        if not ctype or ctype in ("application/octet-stream", "text/html"):
+            ctype = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        if ctype == "text/html":
+            raise RuntimeError(f"Il link non punta a un file ma a una pagina web: {url}")
+        main, sub = ctype.split("/", 1)
+        msg.add_attachment(data, maintype=main, subtype=sub, filename=fname)
+        names.append(fname)
+    return names
+
+
 def send_email(a):
     acc = _accounts(a.get("account"))[0]
     msg = EmailMessage()
@@ -558,8 +617,9 @@ def send_email(a):
     rcpt = _addrs(a.get("to")) + _addrs(a.get("cc")) + _addrs(a.get("bcc"))
     if not rcpt:
         raise RuntimeError("Nessun destinatario")
+    files = _attach(msg, a.get("attachment_urls"))
     _smtp(acc, msg, rcpt)
-    return {"account": acc, "sent_to": rcpt, "subject": msg["Subject"], "saved_in": _save_sent(acc, msg)}
+    return {"account": acc, "sent_to": rcpt, "subject": msg["Subject"], "attachments": files, "saved_in": _save_sent(acc, msg)}
 
 
 def reply_email(a):
@@ -593,9 +653,10 @@ def reply_email(a):
         msg["References"] = ((orig.get("References") or "") + " " + orig["Message-ID"]).strip()
     msg.set_content(body)
     rcpt = [addr for _, addr in email.utils.getaddresses([msg["To"]] + ([msg["Cc"]] if cc else [])) if addr]
+    files = _attach(msg, a.get("attachment_urls"))
     _smtp(acc, msg, rcpt)
     saved = _save_sent(acc, msg, answered=(a.get("folder"), a["id"]))
-    return {"account": acc, "replied_to": rcpt, "subject": subj, "saved_in": saved}
+    return {"account": acc, "replied_to": rcpt, "subject": subj, "attachments": files, "saved_in": saved}
 
 
 HANDLERS = {"list_emails": list_emails, "search_emails": search_emails, "read_email": read_email, "list_folders": list_folders,
@@ -612,7 +673,7 @@ def rpc(req):
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL),
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "aruba-studio", "version": "3.4.0"},
+            "serverInfo": {"name": "aruba-studio", "version": "3.5.0"},
             "instructions": "Caselle email Aruba collegate: " + ", ".join(CURRENT.get()) + ". Prima di inviare, rispondere o eliminare chiedi conferma all'utente.",
         }}
     if method == "ping":
