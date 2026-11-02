@@ -160,7 +160,8 @@ def _dec(value):
     out = []
     for part, enc in decode_header(value):
         out.append(part.decode(enc or "utf-8", errors="replace") if isinstance(part, bytes) else part)
-    return "".join(out).strip()
+    # Gli oggetti lunghi arrivano spezzati su più righe: li riunisco, altrimenti non si possono riusare come intestazione
+    return re.sub(r"\s*[\r\n]+\s*", " ", "".join(out)).strip()
 
 
 def _text(msg, limit=None):
