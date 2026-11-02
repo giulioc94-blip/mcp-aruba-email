@@ -35,6 +35,9 @@ ACCOUNT_PARAM = {"type": "string", "description": "Indirizzo della casella (es. 
 ATTACH_PARAM = {"type": "array", "items": {"type": "string"},
                 "description": "Allegati: link https pubblici a file (es. il PDF di un modulo su un sito istituzionale), massimo 5 file e 10 MB in tutto"}
 
+DATE_PARAM_SINCE = {"type": "string", "description": "Dal giorno (AAAA-MM-GG), in alternativa a days: per leggere un periodo passato"}
+DATE_PARAM_BEFORE = {"type": "string", "description": "Fino al giorno escluso (AAAA-MM-GG): con since legge un periodo, es. since 2026-01-01 e before 2026-02-01"}
+
 TOOLS = [
     {
         "name": "list_emails",
@@ -48,6 +51,7 @@ TOOLS = [
             "unread_only": {"type": "boolean", "description": "Solo non lette"},
             "label": {"type": "string", "description": "Solo email con questa etichetta (keyword IMAP)"},
             "unlabeled_only": {"type": "boolean", "description": "Solo email senza nessuna etichetta"},
+            "since": DATE_PARAM_SINCE, "before": DATE_PARAM_BEFORE,
         }},
         "annotations": {"readOnlyHint": True},
     },
@@ -62,6 +66,7 @@ TOOLS = [
             "folder": {"type": "string"},
             "days": {"type": "integer", "description": "Predefinito 30"},
             "limit": {"type": "integer", "description": "Predefinito 20, massimo 50"},
+            "since": DATE_PARAM_SINCE, "before": DATE_PARAM_BEFORE,
         }},
         "annotations": {"readOnlyHint": True},
     },
@@ -246,6 +251,21 @@ def _since(days):
     return (datetime.now() - timedelta(days=max(int(days), 1))).strftime("%d-%b-%Y")
 
 
+def _imapdate(v):
+    try:
+        return datetime.strptime(str(v).strip()[:10], "%Y-%m-%d").strftime("%d-%b-%Y")
+    except ValueError:
+        raise RuntimeError(f"Data non valida: {v} (serve AAAA-MM-GG)")
+
+
+def _window(a, default_days):
+    """Criteri di data: since/before espliciti, altrimenti gli ultimi N giorni."""
+    crit = ["SINCE", _imapdate(a["since"]) if a.get("since") else _since(a.get("days", default_days))]
+    if a.get("before"):
+        crit += ["BEFORE", _imapdate(a["before"])]
+    return crit
+
+
 def _summaries(c, ids, limit, account):
     out = []
     for uid in list(reversed(ids))[:limit]:
@@ -307,7 +327,7 @@ def _each(a, fn):
 def list_emails(a):
     def run(c, acc):
         _select(c, a.get("folder"))
-        crit = ["SINCE", _since(a.get("days", 2))] + (["UNSEEN"] if a.get("unread_only") else [])
+        crit = _window(a, 2) + (["UNSEEN"] if a.get("unread_only") else [])
         if a.get("label"):
             crit += ["KEYWORD", _kw(a["label"])]
         typ, data = c.uid("search", None, *crit)
@@ -319,7 +339,7 @@ def list_emails(a):
 def search_emails(a):
     def run(c, acc):
         _select(c, a.get("folder"))
-        crit = ["SINCE", _since(a.get("days", 30))]
+        crit = _window(a, 30)
         if a.get("sender"):
             crit += ["FROM", '"%s"' % re.sub(r'["\\\r\n\0]', "", a["sender"])]
         text = a.get("text") or ""
@@ -676,7 +696,7 @@ def rpc(req):
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": req.get("params", {}).get("protocolVersion", PROTOCOL),
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "aruba-studio", "version": "3.5.0"},
+            "serverInfo": {"name": "aruba-studio", "version": "3.6.0"},
             "instructions": "Caselle email Aruba collegate: " + ", ".join(CURRENT.get()) + ". Prima di inviare, rispondere o eliminare chiedi conferma all'utente.",
         }}
     if method == "ping":
