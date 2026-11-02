@@ -574,6 +574,9 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _attach(msg, urls):
+    # Alcuni client passano l'elenco come testo (JSON o un solo link)
+    if isinstance(urls, str):
+        urls = json.loads(urls) if urls.strip().startswith("[") else [urls]
     urls = [u for u in (urls or []) if isinstance(u, str) and u.strip()]
     if len(urls) > 5:
         raise RuntimeError("Massimo 5 allegati")
