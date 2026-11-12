@@ -9,11 +9,19 @@ Server MCP remoto per le caselle Aruba dello Studio Curcio Terremoto, pensato pe
 - Endpoint: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/register` (registrazione dinamica), `/authorize`, `/token` (PKCE S256, refresh di un anno), `/mcp` (JSON-RPC).
 - IMAP `imaps.aruba.it:993`, SMTP `smtps.aruba.it:465`. Le email inviate si salvano negli Inviati; la lettura non segna come letto.
 
-## Strumenti (versione 3.3.0)
+## Strumenti (versione 3.7.0)
 
-`list_emails` (anche per etichetta o solo senza etichette), `search_emails`, `read_email`, `list_folders` (con `labels: true` elenca le etichette), `send_email`, `reply_email`, `move_email`, `delete_email` (nel Cestino, o definitivo), `mark_email` (letto, contrassegnato, `add_labels` e `remove_labels`), `list_labels`, `label_email`.
+`list_emails` (anche per etichetta o solo senza etichette), `search_emails`, `read_email`, `list_folders` (con `labels: true` elenca le etichette), `send_email`, `reply_email`, `forward_email`, `move_email`, `delete_email` (nel Cestino, o definitivo), `mark_email` (letto, contrassegnato, `add_labels` e `remove_labels`), `list_labels`, `label_email`.
 
 Le etichette della webmail Aruba sono keyword IMAP `x-tag-<nome>`.
+
+`list_emails` e `search_emails` leggono anche un periodo passato con `since` e `before`. `send_email` e `reply_email` accettano allegati da link https pubblici (`attachment_urls`).
+
+`forward_email` inoltra un'email con i suoi allegati (tutti, o solo quelli indicati in `attachments`, fino a 18 MB) e salva la copia negli Inviati: serve anche a far arrivare gli allegati su un'altra casella. Lo stesso inoltro si ottiene da `send_email` con `forward_id`, per le chat che hanno ancora l'elenco strumenti vecchio.
+
+## File
+
+`api/index.py` è il server HTTP con l'OAuth. `api/aruba_core.py` contiene gli strumenti di base ed è identico alla versione 3.6.0. `api/aruba_tools.py` lo carica e aggiunge l'inoltro: è il modulo che `index.py` importa.
 
 ## Variabili d'ambiente su Vercel
 
