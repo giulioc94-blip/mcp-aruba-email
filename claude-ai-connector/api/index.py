@@ -175,8 +175,6 @@ class handler(BaseHTTPRequestHandler):
                 return self._send(400, "Richiesta di autorizzazione non valida.", "text/plain; charset=utf-8")
             req = seal("req", {"r": g("redirect_uri"), "s": g("state"), "c": g("code_challenge"), "i": g("client_id")}, 1800)
             return self._send(200, PAGE.format(req=req, boxes=_boxes({}), error=""), "text/html; charset=utf-8")
-        if p == "/allegato":
-            return self._allegato()
         if p == "/":
             return self._send(200, {"name": "Aruba Studio", "mcp": f"{base}/mcp"})
         if p in ("/mcp", "/api/mcp"):
@@ -262,20 +260,6 @@ class handler(BaseHTTPRequestHandler):
             "scope": "email",
         })
 
-    def _allegato(self):
-        q = parse_qs(urlparse(self.path).query)
-        d = unseal("att", (q.get("t") or [""])[0])
-        if not d:
-            return self._send(403, {"error": "Link scaduto o non valido"})
-        aruba_tools.CURRENT.set({d["a"]: d["p"]})
-        try:
-            name, ctype, data = aruba_tools.attachment_bytes(d["a"], d["f"] or None, d["i"], d["n"])
-        except Exception as e:
-            return self._send(404, {"error": str(e)})
-        from urllib.parse import quote
-        return self._send(200, data, ctype or "application/octet-stream",
-                          {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(name)})
-
     def _mcp(self):
         auth = self.headers.get("Authorization") or ""
         boxes = unseal("access", auth[7:].strip()) if auth.lower().startswith("bearer ") else None
@@ -284,7 +268,6 @@ class handler(BaseHTTPRequestHandler):
             return self._send(401, {"error": "unauthorized"},
                               headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'})
         aruba_tools.CURRENT.set(boxes)
-        aruba_tools.LINK.set((self._base(), seal))
         n = int(self.headers.get("Content-Length", 0) or 0)
         try:
             req = json.loads(self.rfile.read(n) if n else b"{}")
