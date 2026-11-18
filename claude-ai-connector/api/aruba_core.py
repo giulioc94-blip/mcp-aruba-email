@@ -645,6 +645,16 @@ def send_email(a):
     return {"account": acc, "sent_to": rcpt, "subject": msg["Subject"], "attachments": files, "saved_in": _save_sent(acc, msg)}
 
 
+def _flat(value):
+    """Intestazione dell'originale su una riga sola: le intestazioni lunghe (References, From, Message-ID)
+    arrivano spezzate su più righe e, ricopiate così, bloccano la risposta."""
+    return re.sub(r"\s*[\r\n]+\s*", " ", str(value or "")).strip()
+
+
+def _msgids(value):
+    return re.findall(r"<[^<>\s]+>", _flat(value))
+
+
 def reply_email(a):
     acc = _accounts(a.get("account"))[0]
     with Box(acc) as c:
@@ -653,29 +663,33 @@ def reply_email(a):
         if typ != "OK" or not data or not isinstance(data[0], tuple):
             raise RuntimeError("Email originale non trovata")
         orig = email.message_from_bytes(data[0][1])
-    to = [orig.get("Reply-To") or orig.get("From")]
+    to = [addr for _, addr in email.utils.getaddresses([_dec(orig.get("Reply-To") or orig.get("From"))]) if addr]
+    if not to:
+        raise RuntimeError("Mittente dell'email originale non leggibile")
     cc = []
     if a.get("reply_all"):
-        others = email.utils.getaddresses([orig.get("To", ""), orig.get("Cc", "")])
-        cc = [addr for _, addr in others if addr and addr.lower() != acc]
+        others = email.utils.getaddresses([_dec(orig.get("To")), _dec(orig.get("Cc"))])
+        cc = [addr for _, addr in others if addr and addr.lower() != acc and addr.lower() not in [t.lower() for t in to]]
     subj = _dec(orig.get("Subject"))
     if not subj.lower().startswith("re:"):
         subj = "Re: " + subj
     quoted = "\n".join("> " + line for line in _text(orig, 8000).splitlines())
-    body = _sign(acc, a.get("body", ""), a) + f"\nIl {orig.get('Date', '')}, {_dec(orig.get('From'))} ha scritto:\n" + quoted
+    body = _sign(acc, a.get("body", ""), a) + f"\nIl {_flat(orig.get('Date'))}, {_dec(orig.get('From'))} ha scritto:\n" + quoted
     msg = EmailMessage()
     msg["From"] = _from(acc)
-    msg["To"] = ", ".join(_dec(x) for x in to if x)
+    msg["To"] = ", ".join(to)
     if cc:
         msg["Cc"] = ", ".join(cc)
     msg["Subject"] = subj
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid(domain=acc.split("@")[-1])
-    if orig.get("Message-ID"):
-        msg["In-Reply-To"] = orig["Message-ID"]
-        msg["References"] = ((orig.get("References") or "") + " " + orig["Message-ID"]).strip()
+    own = _msgids(orig.get("Message-ID"))
+    if own:
+        refs = [r for r in _msgids(orig.get("References")) if r != own[0]]
+        msg["In-Reply-To"] = own[0]
+        msg["References"] = " ".join((refs + own[:1])[-20:])
     msg.set_content(body)
-    rcpt = [addr for _, addr in email.utils.getaddresses([msg["To"]] + ([msg["Cc"]] if cc else [])) if addr]
+    rcpt = to + cc
     files = _attach(msg, a.get("attachment_urls"))
     _smtp(acc, msg, rcpt)
     saved = _save_sent(acc, msg, answered=(a.get("folder"), a["id"]))

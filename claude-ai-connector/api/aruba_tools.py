@@ -1,4 +1,4 @@
-"""Connettore Aruba 3.8.0: aggiunge download_attachment (allegati con link temporaneo, senza inoltro).
+"""Connettore Aruba 3.8.1: le risposte non si bloccano più sulle intestazioni dell'originale spezzate su più righe (References, From, Message-ID).
 
 aruba_fwd.py è il vecchio aruba_tools.py 3.7.0 (inoltro) senza modifiche; index.py importa questo modulo.
 Il link temporaneo è servito da api/allegato.py.
@@ -18,7 +18,7 @@ from aruba_fwd import *  # noqa: F401,F403
 from aruba_fwd import _files
 import aruba_core as core
 
-VERSION = '3.8.0'
+VERSION = '3.8.1'
 BASE = os.environ.get('PUBLIC_URL', 'https://aruba-mcp-studio.vercel.app')
 LINK_TTL = 900
 TEXT_INLINE = 200 * 1024
