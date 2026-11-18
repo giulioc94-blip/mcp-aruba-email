@@ -1,16 +1,19 @@
 """Connettore Aruba 3.8.1: le risposte non si bloccano più sulle intestazioni dell'originale spezzate su più righe (References, From, Message-ID).
 
 aruba_fwd.py è il vecchio aruba_tools.py 3.7.0 (inoltro) senza modifiche; index.py importa questo modulo.
-Il link temporaneo è servito da api/allegato.py.
+Il link temporaneo è servito da api/allegato.py. reply_email è ridefinita qui sotto (3.8.1).
 """
 import base64
 import contextvars
 import email
+import email.utils
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
+from email.message import EmailMessage
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -104,3 +107,57 @@ core.TOOLS.append({
     'annotations': {'readOnlyHint': True, 'destructiveHint': False, 'openWorldHint': False},
 })
 core.HANDLERS['download_attachment'] = download_attachment
+
+
+def _flat(value):
+    """Intestazione dell'originale su una riga sola: le intestazioni lunghe (References, From, Message-ID)
+    arrivano spezzate su più righe e, ricopiate così, bloccano la risposta."""
+    return re.sub(r'\s*[\r\n]+\s*', ' ', str(value or '')).strip()
+
+
+def _msgids(value):
+    return re.findall(r'<[^<>\s]+>', _flat(value))
+
+
+def reply_email(a):
+    acc = core._accounts(a.get('account'))[0]
+    with core.Box(acc) as c:
+        core._select(c, a.get('folder'))
+        typ, data = c.uid('fetch', core._ids({'ids': [a['id']]}), '(BODY.PEEK[])')
+        if typ != 'OK' or not data or not isinstance(data[0], tuple):
+            raise RuntimeError('Email originale non trovata')
+        orig = email.message_from_bytes(data[0][1])
+    to = [x for _, x in email.utils.getaddresses([core._dec(orig.get('Reply-To') or orig.get('From'))]) if x]
+    if not to:
+        raise RuntimeError("Mittente dell'email originale non leggibile")
+    cc = []
+    if a.get('reply_all'):
+        others = email.utils.getaddresses([core._dec(orig.get('To')), core._dec(orig.get('Cc'))])
+        skip = {acc} | {t.lower() for t in to}
+        cc = [x for _, x in others if x and x.lower() not in skip]
+    subj = core._dec(orig.get('Subject'))
+    if not subj.lower().startswith('re:'):
+        subj = 'Re: ' + subj
+    quoted = '\n'.join('> ' + line for line in core._text(orig, 8000).splitlines())
+    body = core._sign(acc, a.get('body', ''), a) + '\nIl %s, %s ha scritto:\n' % (_flat(orig.get('Date')), core._dec(orig.get('From'))) + quoted
+    msg = EmailMessage()
+    msg['From'] = core._from(acc)
+    msg['To'] = ', '.join(to)
+    if cc:
+        msg['Cc'] = ', '.join(cc)
+    msg['Subject'] = subj
+    msg['Date'] = email.utils.formatdate(localtime=True)
+    msg['Message-ID'] = email.utils.make_msgid(domain=acc.split('@')[-1])
+    own = _msgids(orig.get('Message-ID'))
+    if own:
+        refs = [r for r in _msgids(orig.get('References')) if r != own[0]]
+        msg['In-Reply-To'] = own[0]
+        msg['References'] = ' '.join((refs + own[:1])[-20:])
+    msg.set_content(body)
+    files = core._attach(msg, a.get('attachment_urls'))
+    core._smtp(acc, msg, to + cc)
+    saved = core._save_sent(acc, msg, answered=(a.get('folder'), a['id']))
+    return {'account': acc, 'replied_to': to + cc, 'subject': subj, 'attachments': files, 'saved_in': saved}
+
+
+core.HANDLERS['reply_email'] = reply_email
